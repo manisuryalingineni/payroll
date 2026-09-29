@@ -25,6 +25,11 @@ app.use(cors({
 
 app.use(express.json());
 
+// Health check / root route
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'API is running' });
+});
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/payslips', require('./routes/payslips'));
@@ -33,6 +38,10 @@ app.use('/api/leaves', require('./routes/leaves'));
 
 process.on('uncaughtException', (err) => console.error('UNCAUGHT:', err));
 process.on('unhandledRejection', (err) => console.error('UNHANDLED:', err));
+
+app.use('*', (req, res) => {
+  res.status(404).json({ error: `Cannot ${req.method} ${req.originalUrl}` });
+});
 
 app.listen(process.env.PORT || 5000, () =>
   console.log(`API running on port ${process.env.PORT || 5000}`)
