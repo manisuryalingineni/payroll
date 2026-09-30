@@ -140,6 +140,7 @@ router.post(
 
 // GET /api/leaves?status=pending
 // Admin: view all leave requests
+// GET /api/leaves?status=pending  (admin)
 router.get(
   '/',
   authorize('admin'),
@@ -148,137 +149,78 @@ router.get(
     let where = '';
 
     if (req.query.status) {
+      if (!['pending', 'approved', 'rejected'].includes(req.query.status)) {
+        return res.status(400).json({ message: 'Invalid status' });
+      }
       vals.push(req.query.status);
       where = 'WHERE l.status = $1';
     }
 
     const { rows } = await pool.query(
-      `SELECT
-        ${COLS},
-        e.name,
-        e.name AS employee_name,
-        e.emp_code
+      `SELECT ${COLS}, e.name, e.name AS employee_name, e.emp_code
        FROM leaves l
-       JOIN employees e
-         ON e.id = l.employee_id
+       JOIN employees e ON e.id = l.employee_id
        ${where}
-       ORDER BY
-         (l.status = 'pending') DESC,
-         l.start_date DESC`,
+       ORDER BY (l.status = 'pending') DESC, l.start_date DESC`,
       vals
     );
-
     res.json(rows);
   })
 );
 
-// PATCH /api/leaves/:id/status
-// Admin: approve or reject a pending leave request
-// Body:
-// {
-//   status: 'approved' | 'rejected'
-// }
+// PATCH /api/leaves/:id/status  (admin)
 router.patch(
   '/:id/status',
   authorize('admin'),
   asyncHandler(async (req, res) => {
-    const { status } = req.body || {};
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ message: 'Invalid leave id' });
+    }
 
-    if (
-      !['approved', 'rejected'].includes(status)
-    ) {
-      return res.status(400).json({
-        message:
-          'status must be approved or rejected'
-      });
+    const { status } = req.body || {};
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'status must be approved or rejected' });
     }
 
     const client = await pool.connect();
-
     try {
       await client.query('BEGIN');
 
       const { rows } = await client.query(
         `UPDATE leaves
          SET status = $1
-         WHERE id = $2
-           AND status = 'pending'
-         RETURNING *`,
-        [
-          status,
-          req.params.id
-        ]
+         WHERE id = $2 AND status = 'pending'
+         RETURNING id, employee_id, leave_type, status,
+                   start_date::text AS start_date,
+                   end_date::text AS end_date`,
+        [status, id]
       );
-
       const leave = rows[0];
 
       if (!leave) {
         await client.query('ROLLBACK');
-
-        const exists = await pool.query(
-          `SELECT status
-           FROM leaves
-           WHERE id = $1`,
-          [req.params.id]
-        );
-
+        const exists = await pool.query('SELECT status FROM leaves WHERE id = $1', [id]);
         if (exists.rowCount) {
-          return res.status(409).json({
-            message:
-              `This request is already ${exists.rows[0].status}`
-          });
+          return res.status(409).json({ message: `This request is already ${exists.rows[0].status}` });
         }
-
-        return res.status(404).json({
-          message: 'Leave not found'
-        });
+        return res.status(404).json({ message: 'Leave not found' });
       }
 
-      // If approved, mark all dates as leave
-      // in the attendance table.
       if (status === 'approved') {
         await client.query(
-          `INSERT INTO attendance (
-            employee_id,
-            work_date,
-            status,
-            day_type,
-            note
-          )
-          SELECT
-            $1,
-            d::date,
-            'leave',
-            'full',
-            $4
-          FROM generate_series(
-            $2::date,
-            $3::date,
-            interval '1 day'
-          ) d
-          ON CONFLICT (
-            employee_id,
-            work_date
-          )
-          DO UPDATE SET
-            status = 'leave',
-            day_type = 'full',
-            note = EXCLUDED.note`,
-          [
-            leave.employee_id,
-            leave.start_date,
-            leave.end_date,
-            `${leave.leave_type} leave (approved)`
-          ]
+          `INSERT INTO attendance (employee_id, work_date, status, day_type, note)
+           SELECT $1::int, d::date, 'leave', 'full', $4::text
+           FROM generate_series($2::date, $3::date, interval '1 day') d
+           ON CONFLICT (employee_id, work_date)
+           DO UPDATE SET status = 'leave', day_type = 'full', note = EXCLUDED.note`,
+          [leave.employee_id, leave.start_date, leave.end_date,
+           `${leave.leave_type} leave (approved)`]
         );
       }
 
       await client.query('COMMIT');
-
-      res.json({
-        id: leave.id,
-        status: leave.status
-      });
+      res.json({ id: leave.id, status: leave.status });
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "main": "src/app.js",
   "scripts": {
-    "dev": "nodemon src/app.js",
-    "start": "node src/app.js",
-    "db:init": "psql \"$DATABASE_URL\" -f src/schema.sql",
-    "seed": "node scripts/seed.js"
-  },
+  "dev": "nodemon src/app.js",
+  "start": "node src/app.js",
+  "db:init": "node scripts/init-db.js",
+  "seed": "node scripts/seed.js",
+  "setup": "node scripts/init-db.js && node scripts/seed.js"
+},
   "dependencies": {
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
